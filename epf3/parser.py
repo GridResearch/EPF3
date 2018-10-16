@@ -35,10 +35,9 @@
 # (INCLUDING NEGLIGENCE), STRICT LIABILITY OR OTHERWISE, EVEN IF APPLE HAS BEEN 
 # ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+import logging
 import os
 import re
-import logging
-import io
 
 LOGGER = logging.getLogger()
 
@@ -47,7 +46,7 @@ class SubstringNotFoundException(Exception):
     """
     Exception thrown when a comment character or other tag is not found in a situation where it's required.
     """
-    
+
 
 class Parser(object):
     """
@@ -69,7 +68,7 @@ class Parser(object):
     exportModeTag = "exportMode:"
     recordCountTag = "recordsWritten:"
 
-    def __init__(self, filePath, typeMap={"CLOB":"LONGTEXT"}, recordDelim='\x02\n', fieldDelim='\x01'):
+    def __init__(self, filePath, typeMap={"CLOB": "LONGTEXT"}, recordDelim='\x02\n', fieldDelim='\x01'):
         self.dataTypeMap = typeMap
         self.numberTypes = ["INTEGER", "INT", "BIGINT", "TINYINT"]
         self.dateTypes = ["DATE", "DATETIME", "TIME", "TIMESTAMP"]
@@ -77,53 +76,53 @@ class Parser(object):
         self.primaryKey = []
         self.dataTypes = []
         self.exportMode = None
-        self.dateColumns = [] #fields containing dates need special treatment; we'll cache the indexes here
-        self.numberColumns = [] #numeric fields don't accept NULL; we'll cache the indexes here to use later
+        self.dateColumns = []  # fields containing dates need special treatment; we'll cache the indexes here
+        self.numberColumns = []  # numeric fields don't accept NULL; we'll cache the indexes here to use later
         self.typeMap = None
         self.recordsExpected = 0
         self.latestRecordNum = 0
         self.commentChar = Parser.commentChar
         self.recordDelim = recordDelim
         self.fieldDelim = fieldDelim
-        
-        self.eFile = open(filePath, mode="rU") #this will throw an exception if filePath does not exist
+
+        self.eFile = open(filePath, mode="rU")  # this will throw an exception if filePath does not exist
 
         line_n = self.eFile.buffer.seek(-40, 2)
         self.eFile.seek(line_n)
 
-        #Seek to the end and parse the recordsWritten line
-        str = self.eFile.read() #reads from -40 to end of file
+        # Seek to the end and parse the recordsWritten line
+        str = self.eFile.read()  # reads from -40 to end of file
         lst = str.split(self.commentChar + Parser.recordCountTag)
         numStr = lst.pop().rpartition(self.recordDelim)[0]
         self.recordsExpected = int(numStr)
-        self.eFile.seek(0, os.SEEK_SET) #seek back to the beginning
-        #Extract the column names
-        line1 = self.nextRowString(ignoreComments=False)
-        self.columnNames = self.splitRow(line1, requiredPrefix=self.commentChar)
-        
-        #We'll now grab the rest of the header data, without assuming a particular order
-        primStart = self.commentChar+Parser.primaryKeyTag
-        dtStart = self.commentChar+Parser.dataTypesTag
-        exStart = self.commentChar+Parser.exportModeTag
-        
-        #Grab the next 6 lines, which should include all the header comments
-        firstRows=[]
+        self.eFile.seek(0, os.SEEK_SET)  # seek back to the beginning
+        # Extract the column names
+        line1 = self.next_row_string(ignoreComments=False)
+        self.columnNames = self.split_row(line1, requiredPrefix=self.commentChar)
+
+        # We'll now grab the rest of the header data, without assuming a particular order
+        primStart = self.commentChar + Parser.primaryKeyTag
+        dtStart = self.commentChar + Parser.dataTypesTag
+        exStart = self.commentChar + Parser.exportModeTag
+
+        # Grab the next 6 lines, which should include all the header comments
+        firstRows = []
         for j in range(6):
-            firstRows.append(self.nextRowString(ignoreComments=False))
-            firstRows = [aRow for aRow in firstRows if aRow] #strip None rows (possible if the file is < 6 rows)
-        
-        #Loop through the rows, extracting the header info
+            firstRows.append(self.next_row_string(ignoreComments=False))
+            firstRows = [aRow for aRow in firstRows if aRow]  # strip None rows (possible if the file is < 6 rows)
+
+        # Loop through the rows, extracting the header info
         for aRow in firstRows:
             if aRow.startswith(primStart):
-                self.primaryKey = self.splitRow(aRow, requiredPrefix=primStart)
+                self.primaryKey = self.split_row(aRow, requiredPrefix=primStart)
                 self.primaryKey = ([] if self.primaryKey == [''] else self.primaryKey)
             elif aRow.startswith(dtStart):
-                self.dataTypes = self.splitRow(aRow, requiredPrefix=dtStart)
+                self.dataTypes = self.split_row(aRow, requiredPrefix=dtStart)
             elif aRow.startswith(exStart):
-                self.exportMode = self.splitRow(aRow, requiredPrefix=exStart)[0]
-        self.eFile.seek(0, os.SEEK_SET) #seek back to the beginning
+                self.exportMode = self.split_row(aRow, requiredPrefix=exStart)[0]
+        self.eFile.seek(0, os.SEEK_SET)  # seek back to the beginning
 
-        #Convert any datatypes to mapped counterparts, and cache indexes of date/time types and number types
+        # Convert any datatypes to mapped counterparts, and cache indexes of date/time types and number types
         for j in range(len(self.dataTypes)):
             dType = self.dataTypes[j]
             if dType in self.dataTypeMap.keys():
@@ -132,44 +131,40 @@ class Parser(object):
                 self.dateColumns.append(j)
             if dType in self.numberTypes:
                 self.numberColumns.append(j)
-        #Build a dictionary of column names to data types
+        # Build a dictionary of column names to data types
         self.typeMap = dict(zip(self.columnNames, self.dataTypes))
-        
-    
-    def setSeekPos(self, pos=0):
+
+    def set_seek_pos(self, pos=0):
         """
         Sets the underlying file's seek position.
-        
+
         This is useful for resuming a partial ingest that was interrupted for some reason.
         """
         self.eFile.seek(pos)
- 
-    
-    def getSeekPos(self):
+
+    def get_seek_pos(self):
         """
         Gets the underlying file's seek position.
         """
         return self.eFile.tell()
-        
-    seekPos = property(fget=getSeekPos, fset=setSeekPos, doc="Seek position of the underlying file")
-    
 
-    def seekToRecord(self, recordNum):
+    seek_pos = property(fget=get_seek_pos, fset=set_seek_pos, doc="Seek position of the underlying file")
+
+    def seek_to_record(self, recordNum):
         """
         Set the seek position to the beginning of the recordNumth record.
-        
+
         Seeks to the beginning of the file if recordNum <=0,
         or the end if it's greater than the number of records.
         """
-        self.seekPos = 0
+        self.seek_pos = 0
         self.latestRecordNum = 0
         if (recordNum <= 0):
             return
         for j in range(recordNum):
-            self.advanceToNextRecord()
+            self.advance_to_next_record()
 
-            
-    def nextRowString(self, ignoreComments=True):
+    def next_row_string(self, ignoreComments=True):
         """
         Returns (as a string) the next row of data (as delimited by self.recordDelim),
         ignoring comments if ignoreComments is True.
@@ -182,41 +177,39 @@ class Parser(object):
         """
         lst = []
         isFirstLine = True
-        while (True):
+        while True:
             ln = self.eFile.readline()
-            if (not ln): #end of file
+            if not ln:  # end of file
                 break
-            if (isFirstLine and ignoreComments and ln.find(self.commentChar) == 0): #comment
+            if isFirstLine and ignoreComments and ln.find(self.commentChar) == 0:  # comment
                 continue
             lst.append(ln)
             if isFirstLine:
                 isFirstLine = False
-            if (ln.find(self.recordDelim) != -1): #last textual line of this record
+            if ln.find(self.recordDelim) != -1:  # last textual line of this record
                 break
-        if (len(lst) == 0):
+        if len(lst) == 0:
             return None
         else:
-            rowString = "".join(lst) #concatenate the lines into a single string, which is the full content of the row
+            rowString = "".join(lst)  # concatenate the lines into a single string, which is the full content of the row
             return rowString
-            
-            
-    def advanceToNextRecord(self):
+
+    def advance_to_next_record(self):
         """
-        Performs essentially the same task as nextRowString, but without constructing or returning anything.
+        Performs essentially the same task as next_row_string, but without constructing or returning anything.
         This allows much faster access to a record in the middle of the file.
         """
         while (True):
             ln = self.eFile.readline()
-            if (not ln): #end of file
+            if (not ln):  # end of file
                 return
-            if (ln.find(self.commentChar) == 0): #comment; always skip
+            if (ln.find(self.commentChar) == 0):  # comment; always skip
                 continue
-            if (ln.find(self.recordDelim) != -1): #last textual line of this record
+            if (ln.find(self.recordDelim) != -1):  # last textual line of this record
                 break
         self.latestRecordNum += 1
-        
-   
-    def splitRow(self, rowString, requiredPrefix=None):
+
+    def split_row(self, rowString, requiredPrefix=None):
         """
         Given rowString, strips requiredPrefix and self.recordDelim,
         then splits on self.fieldDelim, returning the resulting list.
@@ -233,57 +226,53 @@ class Parser(object):
         str = rowString.partition(self.recordDelim)[0]
         return str.split(self.fieldDelim)
 
-    
-    def nextRecord(self):
+    def next_record(self):
         """
         Returns the next row of data as a list, or None if we're out of data.
         """
-        rowString = self.nextRowString()
+        rowString = self.next_row_string()
         if (rowString):
-            self.latestRecordNum += 1 #update the record counter
-            rec = self.splitRow(rowString)
-            rec = rec[:len(self.columnNames)] #if there are more data records than column names,
-            #trim any surplus records via a slice
-            
-            #replace empty strings with NULL
+            self.latestRecordNum += 1  # update the record counter
+            rec = self.split_row(rowString)
+            rec = rec[:len(self.columnNames)]  # if there are more data records than column names,
+            # trim any surplus records via a slice
+
+            # replace empty strings with NULL
             for i in range(len(rec)):
                 val = rec[i]
                 rec[i] = ("NULL" if val == "" else val)
 
-            #massage dates into MySQL-compatible format.
-            #most date values look like '2009 06 21'; some are '2005-09-06-00:00:00-Etc/GMT'
-            #there are also some cases where there's only a year; we'll pad it out with a bogus month/day
+            # massage dates into MySQL-compatible format.
+            # most date values look like '2009 06 21'; some are '2005-09-06-00:00:00-Etc/GMT'
+            # there are also some cases where there's only a year; we'll pad it out with a bogus month/day
             yearMatch = re.compile(r"^\d\d\d\d$")
             for j in self.dateColumns:
-                rec[j] = rec[j].strip().replace(" ", "-")[:19] #Include at most the first 19 chars
+                rec[j] = rec[j].strip().replace(" ", "-")[:19]  # Include at most the first 19 chars
                 if yearMatch.match(rec[j]):
-                     rec[j] = "%s-01-01" % rec[j]
+                    rec[j] = "%s-01-01" % rec[j]
             return rec
         else:
             return None
-                
-        
-    def nextRecords(self, maxNum=100):
+
+    def next_records(self, maxNum=100):
         """
         Returns the next maxNum records (or fewer if EOF) as a list of lists.
         """
         records = []
         for j in range(maxNum):
-            lst = self.nextRecord()
+            lst = self.next_record()
             if (not lst):
                 break
             records.append(lst)
         return records
-                
-        
-    def nextRecordDict(self):
+
+    def next_record_dict(self):
         """
         Returns the next row of data as a dictionary, keyed by the column names.
         """
-        vals = self.nextRecord()
+        vals = self.next_record()
         if (not vals):
             return None
         else:
             keys = self.columnNames
             return dict(zip(keys, vals))
-
